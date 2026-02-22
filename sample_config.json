@@ -1,0 +1,10 @@
+{
+  "backend_url": "http://localhost:11434/v1",
+  "listen_addr": ":8080",
+  "max_tool_rounds": 10,
+  "mcpServers": {
+    "hello": {
+      "command": "./hello"
+    }
+  }
+}
