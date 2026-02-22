@@ -1,6 +1,6 @@
 # mcpproxy
 
-\_Small proxy tool co-written with AI as a learning exercise. Inspired by [mcphost](https://github.com/mark3labs/mcphost).\_
+_Small proxy tool co-written with AI as a learning exercise. Inspired by [mcphost](https://github.com/mark3labs/mcphost)._
 
 An HTTP reverse proxy that sits between OpenAI-compatible clients and LLM backends (Ollama, llama.cpp, vLLM, etc.), transparently adding MCP tool-calling support. When the backend returns tool calls, the proxy executes them against MCP server subprocesses in an agentic loop, appending results to the conversation until the LLM produces a final text response.
 
