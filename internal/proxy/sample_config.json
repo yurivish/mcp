@@ -4,7 +4,7 @@
   "max_tool_rounds": 10,
   "mcpServers": {
     "hello": {
-      "command": "./hello"
+      "command": "../hello/hello"
     }
   }
 }

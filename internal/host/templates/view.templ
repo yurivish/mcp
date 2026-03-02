@@ -1,0 +1,55 @@
+package templates
+
+script viewScript(viewId string, sandboxOrigin string) {
+	const sandboxFrame = document.getElementById('sandbox');
+
+	const sse = new EventSource('/view/' + viewId + '/sse');
+	sse.onmessage = function(e) {
+		const msg = JSON.parse(e.data);
+		sandboxFrame.contentWindow.postMessage(msg, sandboxOrigin);
+	};
+
+	window.addEventListener('message', function(e) {
+		if (e.origin !== sandboxOrigin) return;
+		if (e.source !== sandboxFrame.contentWindow) return;
+		const msg = e.data;
+		fetch('/view/' + viewId + '/rpc', {
+			method: 'POST',
+			headers: {'Content-Type': 'application/json'},
+			body: JSON.stringify(msg)
+		}).then(function(resp) {
+			if (resp.status === 204) return;
+			return resp.json();
+		}).then(function(body) {
+			if (body) {
+				sandboxFrame.contentWindow.postMessage(body, sandboxOrigin);
+			}
+		}).catch(function(err) {
+			console.error('RPC fetch error:', err);
+		});
+	});
+}
+
+templ viewHead() {
+	<title>MCP View</title>
+	<style>
+		* { margin: 0; padding: 0; box-sizing: border-box; }
+		html, body { width: 100%; height: 100%; overflow: hidden; }
+		iframe { border: none; width: 100%; height: 100%; }
+	</style>
+}
+
+templ View(viewId string, sandboxOrigin string, sandboxURL string) {
+	<!DOCTYPE html>
+	<html lang="en">
+		<head>
+			<meta charset="UTF-8"/>
+			<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+			@viewHead()
+		</head>
+		<body>
+			<iframe id="sandbox" src={ sandboxURL } sandbox="allow-scripts allow-same-origin allow-forms"></iframe>
+			@viewScript(viewId, sandboxOrigin)
+		</body>
+	</html>
+}

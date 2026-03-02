@@ -1,25 +1,24 @@
-package main
+package proxy
 
 import (
 	"context"
 	"encoding/json"
 	"flag"
+	"fmt"
 	"log"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
 	"os"
-	"os/signal"
-	"syscall"
 	"time"
 )
 
 // Config holds the proxy configuration loaded from a JSON file.
 type Config struct {
-	BackendURL   string                     `json:"backend_url"`
-	ListenAddr   string                     `json:"listen_addr"`
-	MaxToolRounds int                       `json:"max_tool_rounds"`
-	MCPServers   map[string]MCPServerConfig `json:"mcpServers"`
+	BackendURL    string                     `json:"backend_url"`
+	ListenAddr    string                     `json:"listen_addr"`
+	MaxToolRounds int                        `json:"max_tool_rounds"`
+	MCPServers    map[string]MCPServerConfig `json:"mcpServers"`
 }
 
 func loadConfig(path string) (*Config, error) {
@@ -40,35 +39,34 @@ func loadConfig(path string) (*Config, error) {
 	return cfg, nil
 }
 
-func main() {
-	configPath := flag.String("config", "config.json", "path to config file")
-	flag.Parse()
+func Run(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("mcpproxy", flag.ContinueOnError)
+	configPath := fs.String("config", "config.json", "path to config file")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
 
 	cfg, err := loadConfig(*configPath)
 	if err != nil {
-		log.Fatalf("loading config: %v", err)
+		return fmt.Errorf("loading config: %w", err)
 	}
 
 	log.Printf("Backend: %s", cfg.BackendURL)
 	log.Printf("Listen:  %s", cfg.ListenAddr)
 
-	// Create a cancellable context for MCP server lifetimes.
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
 	// Connect to all MCP servers.
 	bridge, err := NewMCPBridge(ctx, cfg.MCPServers)
 	if err != nil {
-		log.Fatalf("initializing MCP bridge: %v", err)
+		return fmt.Errorf("initializing MCP bridge: %w", err)
 	}
 	defer bridge.Close()
 
 	// Set up the reverse proxy for pass-through endpoints.
 	target, err := url.Parse(cfg.BackendURL)
 	if err != nil {
-		log.Fatalf("parsing backend URL: %v", err)
+		return fmt.Errorf("parsing backend URL: %w", err)
 	}
-	proxy := &httputil.ReverseProxy{
+	rp := &httputil.ReverseProxy{
 		Director: func(req *http.Request) {
 			req.URL.Scheme = target.Scheme
 			req.URL.Host = target.Host
@@ -79,21 +77,17 @@ func main() {
 	// HTTP mux: chat completions get the agentic handler, everything else passes through.
 	mux := http.NewServeMux()
 	mux.Handle("/v1/chat/completions", chatHandler(cfg.BackendURL, bridge, cfg.MaxToolRounds))
-	mux.Handle("/", proxy)
+	mux.Handle("/", rp)
 
 	server := &http.Server{
 		Addr:    cfg.ListenAddr,
 		Handler: mux,
 	}
 
-	// Graceful shutdown on SIGINT/SIGTERM.
+	// Graceful shutdown when ctx is cancelled.
 	go func() {
-		sigCh := make(chan os.Signal, 1)
-		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-		sig := <-sigCh
-		log.Printf("Received %v, shutting down...", sig)
-		cancel()
-
+		<-ctx.Done()
+		log.Println("Shutting down...")
 		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer shutdownCancel()
 		if err := server.Shutdown(shutdownCtx); err != nil {
@@ -103,7 +97,8 @@ func main() {
 
 	log.Printf("Proxy listening on %s", cfg.ListenAddr)
 	if err := server.ListenAndServe(); err != http.ErrServerClosed {
-		log.Fatalf("HTTP server error: %v", err)
+		return fmt.Errorf("HTTP server error: %w", err)
 	}
 	log.Println("Shutdown complete.")
+	return nil
 }

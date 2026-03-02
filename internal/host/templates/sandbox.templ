@@ -1,0 +1,84 @@
+package templates
+
+templ sandboxHead() {
+	<title>MCP Sandbox</title>
+	<style>
+		* { margin: 0; padding: 0; box-sizing: border-box; }
+		html, body { width: 100%; height: 100%; overflow: hidden; }
+		iframe { border: none; width: 100%; height: 100%; }
+	</style>
+}
+
+templ Sandbox() {
+	<!DOCTYPE html>
+	<html lang="en">
+		<head>
+			<meta charset="UTF-8"/>
+			<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+			@sandboxHead()
+		</head>
+		<body>
+			<script>
+(function() {
+  if (window.self === window.top) {
+    document.body.textContent = 'Error: sandbox must be loaded in an iframe';
+    return;
+  }
+
+  try {
+    void window.top.document;
+    document.body.textContent = 'Error: sandbox is not cross-origin isolated';
+    return;
+  } catch(e) {
+    // Expected — we are properly cross-origin isolated
+  }
+
+  const hostOrigin = (new URL(document.referrer)).origin;
+  let innerFrame = null;
+  let innerReady = false;
+
+  window.addEventListener('message', function(e) {
+    if (e.source === window.parent && e.origin === hostOrigin) {
+      const msg = e.data;
+      if (msg && msg.method === 'ui/notifications/sandbox-resource-ready') {
+        const params = msg.params || {};
+        const html = params.html || '';
+        const sandbox = params.sandbox || {};
+        const permissions = sandbox.permissions || {};
+
+        innerFrame = document.createElement('iframe');
+        innerFrame.style.cssText = 'border:none;width:100%;height:100%';
+
+        let sandboxVal = 'allow-scripts allow-same-origin allow-forms';
+        if (permissions.popups) sandboxVal += ' allow-popups';
+        if (permissions.modals) sandboxVal += ' allow-modals';
+        innerFrame.setAttribute('sandbox', sandboxVal);
+
+        document.body.appendChild(innerFrame);
+
+        const doc = innerFrame.contentDocument;
+        doc.open();
+        doc.write(html);
+        doc.close();
+        innerReady = true;
+      } else if (innerFrame && innerReady) {
+        innerFrame.contentWindow.postMessage(msg, '*');
+      }
+    } else if (innerFrame && e.source === innerFrame.contentWindow) {
+      const msg = e.data;
+      if (msg && msg.method && msg.method.startsWith('ui/notifications/sandbox-')) {
+        return;
+      }
+      window.parent.postMessage(msg, hostOrigin);
+    }
+  });
+
+  window.parent.postMessage({
+    jsonrpc: '2.0',
+    method: 'ui/notifications/sandbox-proxy-ready'
+  }, hostOrigin);
+})();
+		</script>
+		</body>
+	</html>
+}

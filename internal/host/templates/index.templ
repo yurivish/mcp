@@ -1,0 +1,118 @@
+package templates
+
+import (
+	"encoding/json"
+	"fmt"
+
+	"github.com/yurivish/toolkit/syncmap"
+)
+
+// ToolInfo holds displayable metadata about a tool.
+type ToolInfo struct {
+	Name        string
+	Description string
+	Visibility  []string
+	ResourceURI string
+	SchemaJSON  string // JSON schema as pretty-printed string
+	ExampleJSON string // Example arguments generated from schema
+}
+
+// ToolResult holds the outcome of calling a tool.
+type ToolResult struct {
+	Arguments json.RawMessage // arguments used for this call
+	ViewURL   string
+	Result    json.RawMessage
+	Error     string
+}
+
+func toolArgsJSON(tools []ToolInfo) string {
+	m := map[string]any{}
+	for _, t := range tools {
+		m[t.Name] = t.ExampleJSON
+	}
+	b, _ := json.Marshal(map[string]any{"toolArgs": m})
+	return string(b)
+}
+
+func prettyJSON(raw json.RawMessage) string {
+	var parsed any
+	json.Unmarshal(raw, &parsed)
+	pretty, _ := json.MarshalIndent(parsed, "", "  ")
+	return string(pretty)
+}
+
+templ indexHead() {
+	<title>MCP View</title>
+	<style>
+		* { margin: 0; padding: 0; box-sizing: border-box; }
+		body { font-family: system-ui, -apple-system, sans-serif; padding: 24px; max-width: 700px; margin: 0 auto; color: #333; }
+		h1 { margin-bottom: 16px; font-size: 22px; }
+		.tool { background: #f8f9fa; border: 1px solid #e0e0e0; border-radius: 8px; padding: 16px; margin-bottom: 12px; }
+		.tool-name { font-weight: 700; font-size: 16px; }
+		.tool-desc { color: #666; margin: 4px 0 8px; font-size: 14px; }
+		.badge { display: inline-block; font-size: 11px; padding: 2px 6px; border-radius: 4px; margin-right: 4px; }
+		.badge-ui { background: #e3f2fd; color: #1565c0; }
+		.badge-vis { background: #f3e5f5; color: #7b1fa2; }
+		label { font-size: 13px; font-weight: 600; color: #555; display: block; margin-bottom: 4px; }
+		textarea { width: 100%; font-family: ui-monospace, monospace; font-size: 13px; padding: 8px; border: 1px solid #ccc; border-radius: 4px; resize: vertical; }
+		button { background: #0066cc; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-size: 14px; margin-top: 8px; }
+		button:hover { opacity: 0.9; }
+		.result { margin-top: 12px; padding: 12px; background: #f0f0f0; border-radius: 4px; font-family: ui-monospace, monospace; font-size: 13px; white-space: pre-wrap; display: none; }
+	</style>
+}
+
+templ IndexBody(tools []ToolInfo, results *syncmap.Map[string, *ToolResult]) {
+	<main id="root">
+		<h1>MCP View</h1>
+		<div data-signals__ifmissing={ toolArgsJSON(tools) }>
+			for _, tool := range tools {
+				@ToolCard(tool, results)
+			}
+		</div>
+	</main>
+}
+
+templ Index(tools []ToolInfo, results *syncmap.Map[string, *ToolResult]) {
+	@Page(indexHead()) {
+		@IndexBody(tools, results)
+	}
+}
+
+templ ToolCard(tool ToolInfo, results *syncmap.Map[string, *ToolResult]) {
+	<div class="tool">
+		<div>
+			<span class="tool-name">{ tool.Name }</span>
+			if tool.ResourceURI != "" {
+				<span class="badge badge-ui">UI</span>
+			}
+			for _, vis := range tool.Visibility {
+				<span class="badge badge-vis">{ vis }</span>
+			}
+		</div>
+		<div class="tool-desc">{ tool.Description }</div>
+		if tool.SchemaJSON != "" {
+			<details style="margin-bottom:8px">
+				<summary style="font-size:12px;color:#888;cursor:pointer">Schema</summary>
+				<pre style="font-size:12px;margin-top:4px">{ tool.SchemaJSON }</pre>
+			</details>
+		}
+		<label>Arguments (JSON)</label>
+		<textarea id={ fmt.Sprintf("args-%s", tool.Name) } data-bind={ fmt.Sprintf("toolArgs.%s",tool.Name) } data-ignore-morph rows="2"></textarea>
+		<button data-on:click={ fmt.Sprintf(
+			"@post(`/call?tool=${encodeURIComponent('%s')}&arguments=${encodeURIComponent($toolArgs.%s)}`)", tool.Name, tool.Name,
+		) }>Call</button>
+		if result, ok := results.Load(tool.Name); ok {
+			if result.Error != "" {
+				<div class="result" style="display:block">Error: { result.Error }</div>
+			} else if result.ViewURL != "" {
+				<div class="result" style="display:block">
+					<iframe src={ result.ViewURL } style="width:100%;height:400px;border:1px solid #ccc;border-radius:4px;"></iframe>
+				</div>
+			} else {
+				<div class="result" style="display:block">{ prettyJSON(result.Result) }</div>
+			}
+		} else {
+			<div class="result"></div>
+		}
+	</div>
+}

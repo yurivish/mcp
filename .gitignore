@@ -1,2 +1,6 @@
 .DS_Store
 mcpproxy
+testserver
+mcphost
+**/datastar-pro.js
+**/datastar-inspector.js

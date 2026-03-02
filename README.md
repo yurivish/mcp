@@ -1,135 +1,158 @@
-# mcpproxy
+# mcphost
 
-_Small proxy tool co-written with AI as a learning exercise. Inspired by [mcphost](https://github.com/mark3labs/mcphost)._
+A rapid-iteration development environment for building and testing [MCP](https://modelcontextprotocol.io/) servers with interactive UI capabilities (MCP Apps, per the [SEP-1865](https://github.com/nicolo-ribaudo/model-context-protocol/blob/mcp-apps/docs/specification/draft/server-extensions/mcp-apps/index.md) specification).
 
-An HTTP reverse proxy that sits between OpenAI-compatible clients and LLM backends (Ollama, llama.cpp, vLLM, etc.), transparently adding MCP tool-calling support. When the backend returns tool calls, the proxy executes them against MCP server subprocesses in an agentic loop, appending results to the conversation until the LLM produces a final text response.
-
-## File Map
-
-| File           | Lines | Purpose                                                         |
-| -------------- | ----: | --------------------------------------------------------------- |
-| `main.go`      |   100 | Config loading, wiring, HTTP server with graceful shutdown      |
-| `chat.go`      |   171 | `ToolBridge` interface, agentic tool loop, backend forwarding   |
-| `mcpbridge.go` |   148 | MCP server lifecycle, tool discovery, OpenAI format translation |
-| `types.go`     |    73 | OpenAI-compatible request/response structs                      |
-| `proxy.go`     |    28 | Reverse proxy for non-chat endpoints                            |
-| `chat_test.go` |   361 | Tests with `fakeBridge` and canned backend responses            |
-
-## Information Flow
+Given any MCP server command, mcphost launches it as a subprocess, discovers its tools and resources, and serves a web UI where you can invoke tools and interact with server-provided HTML views — all with proper sandboxing and security enforcement.
 
 ```
-                         ┌─────────────────────────────────────────┐
-                         │              mcpproxy                   │
-                         │                                         │
-  ┌────────┐  POST /v1/  │  ┌────────────┐     ┌───────────────┐  │  ┌─────────┐
-  │ Client │─────────────┼─▸│chatHandler │────▸│forwardToBackend│──┼─▸│ Backend │
-  │        │◁────────────┼──│  :23       │◁────│  :99           │◁─┼──│ (LLM)   │
-  └────────┘  JSON/SSE   │  └─────┬──────┘     └───────────────┘  │  └─────────┘
-                         │        │ tool calls?                    │
-                         │        ▼                                │
-                         │  ┌────────────┐     ┌───────────────┐  │
-                         │  │ToolBridge  │────▸│ MCP Server(s) │  │
-                         │  │  :15       │◁────│ (subprocesses)│  │
-                         │  └────────────┘     └───────────────┘  │
-                         │                                         │
-  ┌────────┐  all other  │  ┌────────────┐                        │
-  │ Client │─────────────┼─▸│reverseProxy│────────────────────────┼─▸ Backend
-  │        │◁────────────┼──│  :12       │◁───────────────────────┼── Backend
-  └────────┘  endpoints  │  └────────────┘                        │
-                         └─────────────────────────────────────────┘
+mcphost go run ./cmd/testserver
 ```
 
-**Three communication boundaries:**
-
-1. **Client <-> Proxy** -- standard OpenAI HTTP API (`main.go:71-73`)
-2. **Proxy <-> Backend** -- same API, forwarded via `forwardToBackend` / reverse proxy
-3. **Proxy <-> MCP servers** -- stdio subprocesses managed by `MCPBridge`
-
-## Core Types
-
-### Containment tree
+## Architecture
 
 ```
-ChatCompletionRequest          types.go:8
-├── Messages []Message         types.go:23
-│   ├── ToolCalls []ToolCall   types.go:30
-│   │   └── Function           types.go:36   FunctionCall{Name, Arguments}
-│   └── ToolCallID string                    (for role:"tool" messages)
-└── Tools []Tool               types.go:41
-    └── Function               types.go:46   ToolFunction{Name, Description, Parameters}
-
-ChatCompletionResponse         types.go:54
-└── Choices []Choice           types.go:63
-    └── Message                types.go:23   (same Message type)
-
-Config                         main.go:16
-├── BackendURL, ListenAddr
-├── MaxToolRounds
-└── MCPServers map             main.go:20
-    └── MCPServerConfig        mcpbridge.go:15  {Command, Args}
-
-MCPBridge                      mcpbridge.go:29
-├── sessions []mcpSession      mcpbridge.go:21
-│   ├── session *mcp.ClientSession
-│   └── tools []*mcp.Tool
-└── toolMap map[string]*mcpSession
+┌─────────────────────────────────────────────────────────────┐
+│                     MCP Server (subprocess)                 │
+│                     stdin/stdout transport                  │
+└──────────────────────────┬──────────────────────────────────┘
+                           │ JSON-RPC
+┌──────────────────────────┴──────────────────────────────────┐
+│                     mcphost (Go binary)                    │
+│                                                             │
+│  ┌──────────────┐   ┌──────────────┐   ┌────────────────┐  │
+│  │  MCP Client   │   │ View Manager │   │  CSP Builder   │  │
+│  │  (go-sdk)     │   │  (lifecycle) │   │  (security)    │  │
+│  └──────────────┘   └──────────────┘   └────────────────┘  │
+│                                                             │
+│  Host server (:8080)          Sandbox server (:8081)        │
+│  ┌─────────────────────┐      ┌──────────────────────┐     │
+│  │ /          Index     │      │ /sandbox/{id}        │     │
+│  │ /create    Tool call │      │ CSP-restricted HTML  │     │
+│  │ /view/{id} Host page │      └──────────────────────┘     │
+│  │   └─ /sse  Events   │                                    │
+│  │   └─ /rpc  JSON-RPC │                                    │
+│  └─────────────────────┘                                    │
+└─────────────────────────────────────────────────────────────┘
+                           │
+                      Browser UI
+┌──────────────────────────┴──────────────────────────────────┐
+│  Host page (:8080/view/{id})                                │
+│  ┌────────────────────────────────────────────────────────┐  │
+│  │  <iframe src=":8081/sandbox/{id}">  ← origin boundary │  │
+│  │  ┌──────────────────────────────────────────────────┐  │  │
+│  │  │  <iframe sandbox>  ← sandboxed inner iframe      │  │  │
+│  │  │  Server-provided HTML + MCP Apps SDK             │  │  │
+│  │  └──────────────────────────────────────────────────┘  │  │
+│  └────────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────┘
 ```
 
-## The ToolBridge Interface
+## Capabilities
 
-The single interface that decouples the agentic loop from MCP specifics (`chat.go:15-18`):
+- **Tool discovery**: Lists all tools from the MCP server with their JSON schemas and auto-generated example arguments.
+- **Direct tool calls**: Non-UI tools return results inline on the index page.
+- **Interactive UI views**: Tools with a `resourceUri` open a sandboxed HTML view that receives tool input/result notifications and can call back into the server.
+- **CSP enforcement**: Content Security Policy headers are constructed from server-declared domain metadata, with restrictive defaults (`connect-src 'none'`, `frame-src 'none'`).
+- **Visibility control**: Tools declare whether they're callable by the model, the app, or both. The host enforces this when UI views attempt `tools/call`.
+- **Teardown lifecycle**: On shutdown, all active views receive a `ui/resource-teardown` request and are given time to clean up.
+- **Live reload**: When the server command is a binary on disk, mcphost watches it for changes and automatically restarts the MCP session when the binary is rebuilt. Non-binary commands (e.g. `go run`) skip watching.
 
-```go
-type ToolBridge interface {
-    Tools() []Tool
-    CallTool(ctx context.Context, name, argsJSON string) (string, error)
-}
+## File overview
+
+### Core
+
+| File | Purpose |
+|------|---------|
+| `main.go` | Entry point. Parses CLI args, manages the MCP session via a channel-owning goroutine, discovers tools, wires up the host server, and watches the server binary for live reload. |
+| `host.go` | HTTP servers, view lifecycle, and JSON-RPC message routing between browser and MCP server. The bulk of the host implementation. |
+| `csp.go` | Builds `Content-Security-Policy` headers from resource metadata. |
+
+### Web UI (embedded via `go:embed`)
+
+| File | Purpose |
+|------|---------|
+| `static/index.html` | Tool listing page with forms for invoking each tool. |
+| `static/host.html` | Host-side view page. Embeds the sandbox iframe, bridges SSE events and `postMessage` RPC. |
+| `static/sandbox.html` | Sandbox proxy. Verifies cross-origin isolation, creates an inner sandboxed iframe, relays messages between host and view. |
+
+### Test server
+
+| File | Purpose |
+|------|---------|
+| `cmd/testserver/main.go` | Demo MCP server with a UI tool (`demo-ui-tool`), a plain tool (`echo`), and an app-callable tool (`count-words`). Builds the view HTML with an inlined SDK. |
+| `cmd/testserver/bundle.go` | Uses esbuild to convert the MCP Apps ESM SDK into an IIFE for use in `document.write()`-loaded iframes. |
+
+### Tests
+
+| File | Purpose |
+|------|---------|
+| `spec_test.go` | SEP-1865 specification compliance tests (~40KB). Covers CSP construction, visibility enforcement, sandbox isolation, initialization sequencing, tool input/result delivery, and display modes. |
+| `host_test.go` | HTTP handler behavior tests — tool calls, view creation, SSE streaming, RPC routing. |
+| `csp_test.go` | Unit tests for CSP header generation. |
+
+## Key design decisions
+
+**Dual-port sandboxing.** The host (`:8080`) and sandbox (`:8081`) run on separate ports to establish a cross-origin boundary enforced by the browser. A third layer of isolation comes from the inner `<iframe sandbox="allow-scripts allow-same-origin allow-forms">` which confines the server-provided HTML. This is more complex than a single-origin approach but provides defense-in-depth against untrusted view code.
+
+**Subprocess transport.** The MCP server runs as a child process communicating over stdin/stdout via `CommandTransport`. This keeps the host language-agnostic — any MCP server binary works — but means there's no persistent state between runs.
+
+**Channel-based session ownership.** A single goroutine owns the MCP session and processes all operations (tool calls, resource reads, restarts) sequentially via a channel. This eliminates data races by construction rather than by mutex discipline. The serialization trade-off is irrelevant — the stdio transport is effectively serial anyway.
+
+**Async tool results.** For UI tools, the tool call runs in a background goroutine while the view initializes. If the tool completes before the view sends `initialized`, the result is buffered and delivered once the view is ready. This avoids blocking view setup on potentially slow tool execution, at the cost of some state-management complexity.
+
+**Restrictive default CSP.** When a resource omits CSP metadata, the host applies `connect-src 'none'` and `frame-src 'none'`. Servers must explicitly declare which domains their views need access to. This is intentionally strict — it forces servers to be explicit about network dependencies.
+
+**Embedded assets.** All HTML/CSS is compiled into the binary via `go:embed`, producing a single portable executable with no runtime file dependencies.
+
+## Usage
+
+```sh
+# Build
+go build -o mcphost .
+
+# Run with any MCP server
+./mcphost <server-command> [args...]
+
+# Example with the included test server (no live reload)
+./mcphost go run ./cmd/testserver
+
+# With live reload: build the server binary, then run mcphost against it
+go build -o testserver ./cmd/testserver
+./mcphost ./testserver
+# Rebuild in another terminal → mcphost detects the change and restarts automatically
+
+# Then open http://localhost:8080
 ```
 
-**Two implementations:**
-
-| Implementation | File              | Purpose                                            |
-| -------------- | ----------------- | -------------------------------------------------- |
-| `*MCPBridge`   | `mcpbridge.go:29` | Production -- manages real MCP server subprocesses |
-| `*fakeBridge`  | `chat_test.go:17` | Testing -- configurable `callFn` callback          |
-
-`chatHandler` (`chat.go:23`) depends only on `ToolBridge`, never on `*MCPBridge` directly. This is what makes the agentic loop independently testable.
-
-## Runtime Coordination
-
-### Startup sequence (`main.go:41-100`)
-
-1. **Load config** -- `loadConfig` parses JSON with defaults (`main.go:23-39`)
-2. **Connect MCP servers** -- `NewMCPBridge` launches each subprocess, discovers tools (`mcpbridge.go:36-82`)
-3. **Build HTTP mux** -- `/v1/chat/completions` -> `chatHandler`, everything else -> reverse proxy (`main.go:71-73`)
-4. **Listen** -- with SIGINT/SIGTERM graceful shutdown (`main.go:80-93`)
-
-### Agentic tool loop (`chat.go:23-94`)
+## Message flow for a UI tool call
 
 ```
- 1. Parse client request                        :27
- 2. Remember if client wants streaming           :33
- 3. Replace tools with MCP tools                 :36
- 4. ┌─ Loop (up to maxRounds)                    :39
- 5. │  Force non-streaming                       :41-42
- 6. │  Forward to backend                        :44
- 7. │  No tool calls? ──▸ return final response  :51-63
- 8. │  Append assistant message to conversation   :66-67
- 9. │  For each tool call:                        :70
-10. │    Execute via bridge.CallTool              :73
-11. │    On error, feed error text as result      :74-80
-12. │    Append tool result message               :84-88
-13. └─ Next round
-14. Exhausted? ──▸ 500 "max tool rounds"         :93
+User clicks "Call" on index page
+  → POST /create: host fetches UI resource, creates view, starts async tool call
+  → Redirect to /view/{id}
+
+Host page loads, creates iframe to :8081/sandbox/{id}
+  → Sandbox verifies cross-origin isolation
+  → Sandbox sends sandbox-proxy-ready
+
+Host receives sandbox-proxy-ready via SSE
+  → Sends sandbox-resource-ready with HTML to sandbox
+  → Sandbox creates inner iframe, writes HTML via document.write()
+
+View HTML loads, SDK initializes
+  → View sends ui/initialize → host responds with capabilities
+  → View sends ui/notifications/initialized
+  → Host sends ui/notifications/tool-input with arguments
+
+Tool call completes in background
+  → Host sends ui/notifications/tool-result
+
+View can call app-visible tools
+  → tools/call → host checks visibility → proxies to MCP server → returns result
 ```
 
-When the final response arrives and the client originally requested streaming, the proxy re-issues that last round with `stream: true` and pipes SSE chunks directly to the client (`chat.go:52-57`, `streamFromBackend` at `chat.go:125-164`).
+## Running tests
 
-## Key Design Decisions
-
-- **Non-streaming tool loop** -- Tool rounds always use `stream: false` for simple JSON parsing; only the final response is optionally streamed back to the client (`chat.go:41-42`, `52-57`).
-- **Error-as-result recovery** -- When a tool call fails, the error text is fed back as the tool result so the LLM can recover gracefully instead of the whole request failing (`chat.go:74-80`).
-- **Stateless proxy** -- No session state between requests; each request carries its full conversation history. The proxy adds tool interactions within a single request only.
-- **Tool replacement** -- Client-provided tools are replaced (not merged) with MCP tools (`chat.go:36`). The proxy owns the tool namespace.
-- **Subprocess lifecycle** -- MCP servers are launched once at startup and shared across all requests. `MCPBridge.Close()` terminates them on shutdown (`main.go:62`, `mcpbridge.go:142-148`).
-- **Tool dispatch by name** -- `toolMap` provides O(1) lookup from tool name to owning MCP session, avoiding linear scans across servers (`mcpbridge.go:32`, `104-108`).
+```sh
+go test ./...
+```

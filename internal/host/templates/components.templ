@@ -1,0 +1,22 @@
+package templates
+
+templ Page(head templ.Component) {
+	<!DOCTYPE html>
+	<html lang="en">
+		<head>
+			<meta charset="UTF-8"/>
+			<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+			<script type="module" src="/static/datastar-pro.js"></script>
+			<script type="module" src="/static/datastar-inspector.js"></script>
+			if head != nil {
+				@head
+			}
+		</head>
+		<body>
+			{ children... }
+			<datastar-inspector></datastar-inspector>
+			<div id="hotreload" data-init="@get('/hot-reload', {retryMaxCount: 1000, retryInterval: 20, retryMaxWaitMs: 200})"></div>
+			<div id="events" data-init="@get('/events')"></div>
+		</body>
+	</html>
+}

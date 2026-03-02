@@ -1,4 +1,4 @@
-package main
+package proxy
 
 // OpenAI-compatible chat completion types.
 // These mirror the OpenAI API format used by Ollama, llama.cpp, vLLM, LM Studio, etc.
