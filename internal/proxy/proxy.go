@@ -11,6 +11,8 @@ import (
 	"net/url"
 	"os"
 	"time"
+
+	"github.com/yurivish/mcp/internal/netutil"
 )
 
 // Config holds the proxy configuration loaded from a JSON file.
@@ -95,7 +97,7 @@ func Run(ctx context.Context, args []string) error {
 		}
 	}()
 
-	log.Printf("Proxy listening on %s", cfg.ListenAddr)
+	log.Printf("Proxy listening on http://%s%s", netutil.LocalIP(), cfg.ListenAddr)
 	if err := server.ListenAndServe(); err != http.ErrServerClosed {
 		return fmt.Errorf("HTTP server error: %w", err)
 	}

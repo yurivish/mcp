@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/yurivish/mcp/internal/netutil"
 	"github.com/yurivish/toolkit/pubsub"
 )
 
@@ -101,13 +102,13 @@ func Run(ctx context.Context, args []string) error {
 	sandboxSrv := &http.Server{Addr: "0.0.0.0:" + sandboxPort, Handler: hs.SandboxMux()}
 
 	go func() {
-		log.Printf("Host server listening on 0.0.0.0:%s", hostPort)
+		log.Printf("Host server listening on http://%s:%s", netutil.LocalIP(), hostPort)
 		if err := hostSrv.ListenAndServe(); err != http.ErrServerClosed {
 			log.Fatalf("Host server error: %v", err)
 		}
 	}()
 	go func() {
-		log.Printf("Sandbox server listening on 0.0.0.0:%s", sandboxPort)
+		log.Printf("Sandbox server listening on http://%s:%s", netutil.LocalIP(), sandboxPort)
 		if err := sandboxSrv.ListenAndServe(); err != http.ErrServerClosed {
 			log.Fatalf("Sandbox server error: %v", err)
 		}
