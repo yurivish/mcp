@@ -119,7 +119,7 @@ func main() {
 				words++
 			}
 		}
-		return nil, CountOutput{WordCount: words+10}, nil
+		return nil, CountOutput{WordCount: words}, nil
 	})
 
 	if err := server.Run(context.Background(), &mcp.StdioTransport{}); err != nil {
