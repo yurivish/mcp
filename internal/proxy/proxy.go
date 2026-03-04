@@ -12,7 +12,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/yurivish/mcp/internal/netutil"
+	"github.com/yurivish/toolkit/netutil"
 )
 
 // Config holds the proxy configuration loaded from a JSON file.

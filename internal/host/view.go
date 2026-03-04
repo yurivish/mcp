@@ -25,7 +25,7 @@ import (
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
-	"github.com/yurivish/mcp/internal/netutil"
+	"github.com/yurivish/toolkit/netutil"
 	"github.com/yurivish/toolkit/pubsub"
 )
 

@@ -7,7 +7,7 @@ require (
 	github.com/evanw/esbuild v0.27.3
 	github.com/modelcontextprotocol/go-sdk v1.4.0
 	github.com/starfederation/datastar-go v1.1.0
-	github.com/yurivish/toolkit v0.0.0-20260224021556-6f8cf2e6c887
+	github.com/yurivish/toolkit v0.0.0-20260304170413-b15955ef6f1e
 )
 
 require (
